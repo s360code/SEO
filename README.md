@@ -1,2 +1,2 @@
 # SEO
-Repository for the SEO department
+Repository of the SEO department
