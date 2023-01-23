@@ -13,8 +13,6 @@ from json import dumps
 import pandas as pd
 import datetime
 from google.colab import output
-!pip install --upgrade gspread &> /dev/null
-!pip install gspread_dataframe --upgrade &> /dev/null
 import gspread
 from google.colab import auth, output
 from oauth2client.client import GoogleCredentials
@@ -24,7 +22,6 @@ from requests.auth import HTTPBasicAuth
 import json
 from dateutil.relativedelta import relativedelta
 import time
-import pandasql as ps
 import re
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
