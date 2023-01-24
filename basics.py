@@ -25,7 +25,13 @@ import time
 import re
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
-class Basics:        
+class Basics:
+    def __init__(self, sheet_id, sheet, startrow):
+        self.sheet_id = sheet_id
+        self.connection = self.gc.open_by_url("https://docs.google.com/spreadsheets/d/"+str(self.sheet_id))
+        self.sheet = self.connection.worksheet(sheet)
+        self.startrow = startrow       
+    
     def data_from_sheet(self, sheet, startrow):
         dataframe = get_as_dataframe(self.sheet)
         dataframe.columns = dataframe.iloc[self.startrow, :].tolist()
