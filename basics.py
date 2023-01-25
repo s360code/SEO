@@ -27,12 +27,15 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
 class Basics:
     def __init__(self, sheet_id, sheet, startrow):
+        auth.authenticate_user()
+        self.creds, _ = default()
+        self.gc = gspread.authorize(self.creds)
         self.sheet_id = sheet_id
         self.connection = self.gc.open_by_url("https://docs.google.com/spreadsheets/d/"+str(self.sheet_id))
         self.sheet = self.connection.worksheet(sheet)
-        self.startrow = startrow       
-    
-    def data_from_sheet(self, sheet, startrow):
+        self.startrow = startrow
+
+    def data_from_sheet(self):
         dataframe = get_as_dataframe(self.sheet)
         dataframe.columns = dataframe.iloc[self.startrow, :].tolist()
         dataframe = dataframe.drop(range(self.startrow+1))
