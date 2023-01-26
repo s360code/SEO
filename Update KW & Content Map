@@ -1,0 +1,189 @@
+from gspread_dataframe import get_as_dataframe, set_with_dataframe
+from gspread_formatting import *
+from google.auth.transport.requests import AuthorizedSession
+#from oauth2client.client import GoogleCredentials
+import pandas as pd
+import google.auth
+import gspread
+from urllib.request import urlopen, Request
+import json
+import numpy as np
+import pandas as pd
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+import calendar
+import concurrent.futures
+import re
+from google.colab import auth, output
+from oauth2client.client import GoogleCredentials
+from google.auth import default
+
+# Get basics class from SEO github
+import basics
+auth.authenticate_user()
+creds, _ = default()
+gc = gspread.authorize(creds)
+
+class UpdateScript:
+    def __init__(self, sheet_id, gc):
+      self.sheet_id = sheet_id
+      self.gc = gc
+      self.connection = self.gc.open_by_url("https://docs.google.com/spreadsheets/d/"+str(self.sheet_id))
+      self.keyword_analysis_sheet = self.connection.worksheet('Keyword Analysis')
+      self.content_map_sheet = self.connection.worksheet('Content map')
+      self.content_plan_sheet = self.connection.worksheet('Content plan')
+      self.content_gap_sheet = self.connection.worksheet('Content Gap')
+      self.start = 4
+    
+    def getDataframes (self):
+      """
+      Getting dataframes for later use 
+      """
+      getDataKeyword = basics.Basics(self.sheet_id, self.keyword_analysis_sheet.title, self.start)
+      getDataContentMap = basics.Basics(self.sheet_id, self.content_map_sheet.title, self.start)
+      getDataContentPlan = basics.Basics(self.sheet_id, self.content_plan_sheet.title, self.start)
+      getDataContetGap = basics.Basics(self.sheet_id, self.content_gap_sheet.title, self.start)
+      keyword_analysisDF = getDataKeyword.data_from_sheet()
+      contentMap_df = getDataContentMap.data_from_sheet()
+      contentPlan_df = getDataContentPlan.data_from_sheet()
+      contentGap_df = getDataContetGap.data_from_sheet()
+      return keyword_analysisDF, contentMap_df, contentPlan_df, contentGap_df
+
+    def get_client_protocol(self):
+      """
+      Getting client protocol 
+      """
+      keyword_analysisDF = self.getDataframes()[0]
+      try:
+          client_prot = keyword_analysisDF['Mapped URL'].iloc[0]
+      except Exception:
+          try:
+              client_prot = keyword_analysisDF['Mapped URL'].iloc[0]
+          except Exception:
+              client_prot = keyword_analysisDF['Current URL'].iloc[0]
+
+      client_prot = str(client_prot)
+      client_prot = re.sub(r'\/\w*(\/\w*){1,}$','',client_prot)
+      client_prot = re.sub(r'\.\w{2,3}\/.*','',client_prot)
+
+      return client_prot
+
+    def content_gap_transfer (self):
+      """
+    Summary: 
+        Graps the keywords selected from the Content gap analysis and inserts these into the Keyword Analysis with all info
+    Return:
+        Returns a updated Keyword analysis with the keywords from the content gap analysis
+      """
+      client_prot = self.get_client_protocol()
+      keyword_analysisDF, contentMap_df, contentPlan_df, contentGap_df = self.getDataframes()
+      updated_kw_analysis = contentGap_df[contentGap_df['Useable']==True]
+      avg_pos1_ctr = 0.2222 #Average CTR for position one = 22,22%
+      updated_kw_analysis['Order'] = 4
+      updated_kw_analysis['Priority'] = ''
+      updated_kw_analysis['Traffic'] = 0
+      updated_kw_analysis['Traffic Potential'] = (avg_pos1_ctr * updated_kw_analysis['Volume'].astype(float)) - updated_kw_analysis['Traffic'].astype(float).astype(int)
+      updated_kw_analysis['Position'] = 99
+      updated_kw_analysis['Current URL'] = ''
+      updated_kw_analysis['Mapped URL'] = updated_kw_analysis['URL'].replace('https?:\/\/.*\.\w{1,3}\/', 'New URL: '+client_prot, regex=True)
+      updated_kw_analysis = updated_kw_analysis[['Keyword',	'Priority',	'Volume',	'Traffic', 'Traffic Potential',	'Position',	'Current URL', 'Mapped URL']]
+      keyword_analysisDF = keyword_analysisDF.append(updated_kw_analysis) # Insert info from Content Gap into the Keyword Analysis
+      keyword_analysisDF = keyword_analysisDF.drop_duplicates(subset=['Keyword'], keep='last')
+      return keyword_analysisDF
+
+    def create_content_map(self):
+      """
+      Summary.
+      Takes the df from content_gap_transfer and uses the Mapped URL to create a new content map
+
+      Return:
+      Returns a DF that is used for merging with the curremt Content Map
+      """ 
+      keyword_analysisDF = self.content_gap_transfer()
+      col = 'Mapped URL'
+
+      keyword_analysisDF['Volume'] = keyword_analysisDF['Volume'].astype(int)
+      keyword_analysisDF['Position'] = keyword_analysisDF['Position'].astype(float).astype(int)
+
+      keyword_analysisDF.sort_values([col, 'Order','Volume'], ascending=[False, True, False], inplace=True)
+
+      group = keyword_analysisDF.groupby(col)["Keyword"].apply(list).reset_index()                # Creating group based on Keywords to create Priority Columns & All Keywords column
+      group['Primary Keyword'] = group['Keyword'].str[0]
+      group['Secondary Keyword'] = group['Keyword'].str[1]
+      group['Tertiary Keyword'] = group['Keyword'].str[2]
+      group['All Keywords'] =[', '.join(map(str, l)) for l in group['Keyword']]     # Remove list function to create comma seperated strings
+
+      groupvolume = keyword_analysisDF.groupby(col)["Volume"].apply(list).reset_index()           # Creating group based on Volume to create Priority Columns & Total Volume column
+      groupvolume['Primary Keyword Volume'] = groupvolume['Volume'].str[0]
+      groupvolume['Secondary Keyword Volume'] = groupvolume['Volume'].str[1]
+      groupvolume['Tertiary Keyword Volume'] = groupvolume['Volume'].str[2]
+      groupvolume['Total Volume'] = [sum(i) for i in groupvolume['Volume']]         # Creating Total Volume based on sum of Volume Column
+
+      grouprank = keyword_analysisDF.groupby(col)["Position"].apply(list).reset_index()           # Creating group based on Position  to create Priority Columns
+      grouprank['Primary Keyword Rank'] = grouprank['Position'].str[0]
+      grouprank['Secondary Keyword Rank'] = grouprank['Position'].str[1]
+      grouprank['Tertiary Keyword Rank'] = grouprank['Position'].str[2]
+
+      traffic = keyword_analysisDF[[col, 'Traffic']]
+      traffic['Traffic'] = traffic['Traffic'].replace(np.nan, 0)
+      traffic['Traffic'] = traffic['Traffic'].astype(float)
+      traffic = traffic.groupby(col).sum()
+      
+      potential_traffic = keyword_analysisDF[[col, 'Traffic Potential']]
+      potential_traffic['Traffic Potential'] = potential_traffic['Traffic Potential'].replace(np.nan, 0)
+      potential_traffic['Traffic Potential'] = potential_traffic['Traffic Potential'].astype(float)
+      potential_traffic = potential_traffic.groupby(col).sum()
+
+      temp_df = group.merge(groupvolume, on = col)                                  # Mergin the group dataframes together to one
+      temp_df = temp_df.merge(grouprank, on = col) 
+      temp_df = temp_df.merge(traffic, on = col)                                 # The one dataframe is used as output
+      temp_df = temp_df.merge(potential_traffic, on = col)
+      temp_df['URL'] = temp_df[col]
+      
+      temp_df = temp_df[['URL', 'Total Volume', 'Traffic', 'Traffic Potential', 'Primary Keyword', 'Primary Keyword Volume', 'Primary Keyword Rank','Secondary Keyword', 'Secondary Keyword Volume', 'Secondary Keyword Rank', 'Tertiary Keyword', 'Tertiary Keyword Volume', 'Tertiary Keyword Rank', 'All Keywords' ]]
+      temp_df = temp_df.fillna('')
+      temp_df = temp_df.sort_values(by=['Total Volume', 'URL'], ascending=[False, True])
+      temp_df['Traffic'] = temp_df['Traffic'].round().astype(int)
+      temp_df['Traffic Potential'] = temp_df['Traffic Potential'].round().astype(int)
+
+
+      return temp_df
+
+    def getNewURLs(self):
+      """
+      Summary:
+      Takes df from create_content_map, and the original content map.
+      Then drops the columns in original that exist in the temp_df since it contains all the new the informaiton.
+      Merges the two dataframe, and drops the duplicates keeping the first. This results in the original
+      data that remaning and comments, etc not being overwritten. 
+      Lastly uses the columsn from the original df to makes sure the order of columns is identical.
+      """
+      temp_df = self.create_content_map()
+      content_map_df = self.getDataframes()[1]
+      content_map_df = content_map_df.drop(columns =['Total Volume','Traffic','Traffic Potential','Primary Keyword','Primary Keyword Volume','Primary Keyword Rank','Secondary Keyword','Secondary Keyword Volume','Secondary Keyword Rank','Tertiary Keyword','Tertiary Keyword Volume','Tertiary Keyword Rank','All Keywords'])
+      new_df = content_map_df.merge(temp_df, on='URL', how='right')
+      new_df = new_df.drop_duplicates(subset=['URL'], keep='first')
+      OG_content_map = self.getDataframes()[1]
+      new_df = new_df[OG_content_map.columns]
+
+      return new_df
+
+    def update_googlesheet(self):
+      """
+      Summary: 
+          Removes already existing Data in the Sheets and pasting in with fresh data from the Updated DF
+      Return:
+          Returns nothing, but updates the Google Sheets added
+      """
+      content_map_df = self.getNewURLs() # post this 
+      keyword_analysis_df = self.content_gap_transfer() # post this 
+      self.content_map_sheet.clear()
+      self.keyword_analysis_sheet.clear()
+
+      set_with_dataframe(self.keyword_analysis_sheet, keyword_analysis_df, row=6, include_index=False, include_column_header=True) # set keyword analysis
+      set_with_dataframe(self.content_map_sheet, content_map_df, row=6, include_index=False, include_column_header=True) # set content map
+
+      return 
+test = UpdateScript('18ItgOhKo5FoZCjXmsaUtpHphjQHhNMHGCBGdEpK-Bdk', gc)
+new_contentM = test.getNewURLs()
+test.update_googlesheet()
